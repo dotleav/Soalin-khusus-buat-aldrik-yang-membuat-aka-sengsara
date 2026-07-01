@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Quiz App</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --border: #334155;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #6366f1;
+    --correct: #16a34a;
+    --wrong: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    justify-content: center;
+    padding: 24px 16px 80px;
+  }
+  .wrap { width: 100%; max-width: 720px; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .sub { color: var(--muted); margin-bottom: 20px; font-size: 0.9rem; }
+
+  .progress-bar {
+    height: 6px;
+    background: var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-bottom: 20px;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.2s ease;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .qid { color: var(--muted); font-size: 0.8rem; margin-bottom: 6px; }
+  .qtext { font-size: 1.05rem; margin-bottom: 12px; line-height: 1.5; }
+  .qimg, .eximg {
+    max-width: 100%;
+    border-radius: 10px;
+    margin: 8px 0 14px;
+    display: block;
+  }
+
+  .option {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .option:hover { border-color: var(--accent); }
+  .option input { margin-top: 3px; }
+  .option.selected { border-color: var(--accent); background: rgba(99,102,241,0.12); }
+  .option.correct { border-color: var(--correct); background: rgba(22,163,74,0.15); }
+  .option.wrong { border-color: var(--wrong); background: rgba(220,38,38,0.15); }
+  .option .label { font-weight: 600; margin-right: 4px; }
+
+  .explanation {
+    margin-top: 14px;
+    padding: 14px;
+    border-radius: 10px;
+    background: rgba(99,102,241,0.08);
+    border: 1px solid var(--border);
+    font-size: 0.92rem;
+    line-height: 1.5;
+    display: none;
+  }
+  .explanation.show { display: block; }
+  .explanation .tag { color: var(--accent); font-weight: 600; font-size: 0.8rem; margin-bottom: 6px; }
+
+  .nav { display: flex; justify-content: space-between; gap: 10px; margin-top: 8px; }
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 18px;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  button.secondary { background: var(--border); color: var(--text); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .summary { text-align: center; }
+  .summary .score { font-size: 2.2rem; font-weight: 700; margin: 12px 0; }
+  .review-list { text-align: left; margin-top: 20px; }
+  .review-item { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+  .review-item .status { font-weight: 600; }
+  .review-item .status.ok { color: var(--correct); }
+  .review-item .status.no { color: var(--wrong); }
+
+  .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  select {
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Quiz App</h1>
+  <div class="sub" id="subInfo">Memuat soal...</div>
+
+  <div class="topbar" id="topbar" style="display:none;">
+    <span id="counter"></span>
+    <div style="display:flex; gap:8px;">
+      <select id="categorySelect"></select>
+      <select id="modeSelect">
+        <option value="exam">Mode Ujian (jawaban di akhir)</option>
+        <option value="practice">Mode Latihan (langsung lihat jawaban)</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+
+  <div id="quizArea"></div>
+  <div id="summaryArea" style="display:none;"></div>
+</div>
+
+<script type="module">
+import { questions as allQuestions } from "./data/questions.js";
+
+const quizArea = document.getElementById("quizArea");
+const summaryArea = document.getElementById("summaryArea");
+const subInfo = document.getElementById("subInfo");
+const counterEl = document.getElementById("counter");
+const progressFill = document.getElementById("progressFill");
+const topbar = document.getElementById("topbar");
+const modeSelect = document.getElementById("modeSelect");
+const categorySelect = document.getElementById("categorySelect");
+
+let current = 0;
+let answers = {}; // id -> chosen letter
+let mode = "exam";
+let questions = allQuestions;
+
+const categories = ["Semua Kategori", ...new Set(allQuestions.map(q => q.category).filter(Boolean))];
+
+if (!allQuestions || allQuestions.length === 0) {
+  subInfo.textContent = "Belum ada soal. Tambahkan manual di data/questions.js atau jalankan: npm run convert -- file.docx";
+} else {
+  subInfo.textContent = `${allQuestions.length} soal dimuat.`;
+  topbar.style.display = "flex";
+  categorySelect.innerHTML = categories.map(c => `<option value="${escapeAttr(c)}">${escapeHtml(c)}</option>`).join("");
+  render();
+}
+
+categorySelect.addEventListener("change", () => {
+  const val = categorySelect.value;
+  questions = val === "Semua Kategori" ? allQuestions : allQuestions.filter(q => q.category === val);
+  current = 0;
+  answers = {};
+  quizArea.style.display = "block";
+  topbar.style.display = "flex";
+  summaryArea.style.display = "none";
+  render();
+});
+
+modeSelect.addEventListener("change", () => {
+  mode = modeSelect.value;
+  render();
+});
+
+function render() {
+  if (current >= questions.length) return renderSummary();
+
+  const q = questions[current];
+  counterEl.textContent = `Soal ${current + 1} / ${questions.length}`;
+  progressFill.style.width = `${((current) / questions.length) * 100}%`;
+
+  const chosen = answers[q.id];
+  const answered = chosen !== undefined;
+  const showAnswer = mode === "practice" && answered;
+
+  quizArea.innerHTML = `
+    <div class="card">
+      <div class="qid">ID: ${escapeHtml(q.id)}${q.category ? ` · ${escapeHtml(q.category)}` : ""}</div>
+      <div class="qtext">${escapeHtml(q.question)}</div>
+      ${(q.questionImages || []).map(src => `<img class="qimg" src="${src}" alt="gambar soal">`).join("")}
+      <div class="options">
+        ${Object.entries(q.options).map(([letter, text]) => {
+          let cls = "option";
+          if (chosen === letter) cls += " selected";
+          if (showAnswer) {
+            if (letter === q.answer) cls += " correct";
+            else if (letter === chosen) cls += " wrong";
+          }
+          return `
+            <label class="${cls}" data-letter="${letter}">
+              <input type="radio" name="opt" value="${letter}" ${chosen === letter ? "checked" : ""}>
+              <span><span class="label">${letter}.</span>${escapeHtml(text)}</span>
+            </label>
+          `;
+        }).join("")}
+      </div>
+      ${mode === "practice" ? `
+        <div class="explanation ${showAnswer ? "show" : ""}" id="expBox">
+          <div class="tag">Penjelasan</div>
+          <div>${escapeHtml(q.explanation || "(tidak ada penjelasan)")}</div>
+          ${(q.explanationImages || []).map(src => `<img class="eximg" src="${src}" alt="gambar penjelasan">`).join("")}
+        </div>
+      ` : ""}
+      <div class="nav">
+        <button class="secondary" id="prevBtn" ${current === 0 ? "disabled" : ""}>Sebelumnya</button>
+        <button id="nextBtn">${current === questions.length - 1 ? "Selesai" : "Berikutnya"}</button>
+      </div>
+    </div>
+  `;
+
+  quizArea.querySelectorAll(".option").forEach(opt => {
+    opt.addEventListener("click", () => {
+      const letter = opt.dataset.letter;
+      answers[q.id] = letter;
+      render();
+    });
+  });
+
+  document.getElementById("prevBtn").addEventListener("click", () => {
+    current = Math.max(0, current - 1);
+    render();
+  });
+  document.getElementById("nextBtn").addEventListener("click", () => {
+    current += 1;
+    render();
+  });
+}
+
+function renderSummary() {
+  quizArea.style.display = "none";
+  topbar.style.display = "none";
+  progressFill.style.width = "100%";
+  summaryArea.style.display = "block";
+
+  let correctCount = 0;
+  const reviewHtml = questions.map(q => {
+    const chosen = answers[q.id];
+    const isCorrect = chosen === q.answer;
+    if (isCorrect) correctCount++;
+    return `
+      <div class="review-item">
+        <div class="status ${isCorrect ? "ok" : "no"}">${isCorrect ? "✓ Benar" : "✗ Salah"}</div>
+        <div>${escapeHtml(q.question)}</div>
+        <div style="color:var(--muted);font-size:0.85rem;margin-top:4px;">
+          Jawabanmu: ${chosen ? `${chosen}. ${escapeHtml(q.options[chosen] || "")}` : "(tidak dijawab)"}<br>
+          Kunci: ${q.answer}. ${escapeHtml(q.options[q.answer] || "")}
+        </div>
+        ${q.explanation ? `<div style="margin-top:6px;font-size:0.85rem;">${escapeHtml(q.explanation)}</div>` : ""}
+        ${(q.explanationImages || []).map(src => `<img class="eximg" src="${src}" alt="gambar penjelasan">`).join("")}
+      </div>
+    `;
+  }).join("");
+
+  const pct = Math.round((correctCount / questions.length) * 100);
+
+  summaryArea.innerHTML = `
+    <div class="card summary">
+      <div>Hasil Quiz</div>
+      <div class="score">${correctCount} / ${questions.length}</div>
+      <div style="color:var(--muted);">${pct}% benar</div>
+      <button id="restartBtn" style="margin-top:14px;">Ulangi Quiz</button>
+      <div class="review-list">${reviewHtml}</div>
+    </div>
+  `;
+
+  document.getElementById("restartBtn").addEventListener("click", () => {
+    current = 0;
+    answers = {};
+    quizArea.style.display = "block";
+    topbar.style.display = "flex";
+    summaryArea.style.display = "none";
+    render();
+  });
+}
+
+function escapeAttr(str) {
+  return escapeHtml(str);
+}
+
+function escapeHtml(str) {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+</script>
+</body>
+</html>
