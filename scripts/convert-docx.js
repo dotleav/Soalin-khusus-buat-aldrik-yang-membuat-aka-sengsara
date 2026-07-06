@@ -62,16 +62,13 @@ if (result.messages?.length) {
 }
 
 // --- 2. Pecah HTML jadi urutan "token" per baris (teks atau gambar) ---
-// Setiap <p>/<h1>/<h2>/<h3>...</...> jadi satu baris. Tag <img> di dalamnya diekstrak terpisah.
+// Setiap <p>/<h1>/<h2>/<h3>/<li>...</...> jadi satu blok. Tag <img> di dalamnya diekstrak terpisah.
 // Heading (h1/h2/h3) ditandai isHeading: true supaya bisa dipakai sebagai kategori soal.
-const blockRegex = /<(p|h1|h2|h3)[^>]*>([\s\S]*?)<\/\1>/g;
-const lines = [];
-let m;
-while ((m = blockRegex.exec(html)) !== null) {
-  const tag = m[1];
-  const inner = m[2];
-  const imgs = [...inner.matchAll(/<img[^>]*src="([^"]+)"[^>]*>/g)].map((x) => x[1]);
-  const text = inner
+// <li> ditandai isListItem: true -> ini soal yang pakai numbering otomatis Word (tanpa angka di teks).
+// PENTING: di dalam satu <p>/<li>, opsi A-E / Kunci / Penjelasan sering digabung pakai <br/>
+// bukan paragraf terpisah. Jadi setiap blok dipecah lagi per <br/> jadi beberapa "baris".
+function cleanText(fragment) {
+  return fragment
     .replace(/<img[^>]*>/g, "")
     .replace(/<[^>]+>/g, "")
     .replace(/&amp;/g, "&")
@@ -79,9 +76,60 @@ while ((m = blockRegex.exec(html)) !== null) {
     .replace(/&gt;/g, ">")
     .replace(/&nbsp;/g, " ")
     .trim();
-  if (text || imgs.length) {
-    lines.push({ text, images: imgs, isHeading: tag !== "p" });
+}
+
+// PENTING: <li> bisa muncul di dua konteks yang beda maknanya:
+//  - di dalam <ol> -> ini soal baru (numbering otomatis Word untuk pertanyaan)
+//  - di dalam <ul> -> di docx ini ternyata dipakai untuk opsi A-E (bullet list),
+//    BUKAN soal baru. Jadi <li> di dalam <ul> harus diperlakukan sebagai baris
+//    teks biasa supaya "A. ..." tetap kena optionLine regex seperti biasa.
+const blockRegex = /<(p|h1|h2|h3|ol|ul)[^>]*>([\s\S]*?)<\/\1>/g;
+const lines = [];
+let m;
+while ((m = blockRegex.exec(html)) !== null) {
+  const tag = m[1];
+  const inner = m[2];
+  const isHeading = tag === "h1" || tag === "h2" || tag === "h3";
+
+  if (tag === "ol" || tag === "ul") {
+    // Ambil tiap <li> di dalamnya sebagai baris terpisah.
+    const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/g;
+    let lm;
+    while ((lm = liRegex.exec(inner)) !== null) {
+      const liInner = lm[1];
+      const subParts = liInner.split(/<br\s*\/?>/i);
+      subParts.forEach((part, idx) => {
+        const imgs = [...part.matchAll(/<img[^>]*src="([^"]+)"[^>]*>/g)].map((x) => x[1]);
+        const text = cleanText(part);
+        if (text || imgs.length) {
+          lines.push({
+            text,
+            images: imgs,
+            isHeading: false,
+            // Hanya <li> di dalam <ol>, sub-baris pertama, yang jadi awal soal baru.
+            isListItem: tag === "ol" && idx === 0,
+          });
+        }
+      });
+    }
+    continue;
   }
+
+  // Pecah isi blok jadi beberapa sub-baris berdasarkan <br/>
+  const subParts = inner.split(/<br\s*\/?>/i);
+
+  subParts.forEach((part, idx) => {
+    const imgs = [...part.matchAll(/<img[^>]*src="([^"]+)"[^>]*>/g)].map((x) => x[1]);
+    const text = cleanText(part);
+    if (text || imgs.length) {
+      lines.push({
+        text,
+        images: imgs,
+        isHeading,
+        isListItem: false,
+      });
+    }
+  });
 }
 
 // --- 3. Parse baris-baris itu jadi struktur soal ---
@@ -104,7 +152,7 @@ function pushCurrent() {
 }
 
 for (const line of lines) {
-  const { text, images, isHeading } = line;
+  const { text, images, isHeading, isListItem } = line;
 
   // Heading di docx (Style Heading 1/2/3) otomatis jadi kategori soal
   // untuk semua soal berikutnya sampai ketemu heading lain.
@@ -122,6 +170,27 @@ for (const line of lines) {
 
   if (idLine.test(text)) {
     pendingId = text.match(idLine)[1].trim();
+    continue;
+  }
+
+  // Soal yang pakai numbered-list otomatis Word (<ol><li>) -> tidak ada angka
+  // di teksnya (angkanya cuma tampilan visual Word, bukan karakter asli).
+  // Setiap <li> baru = soal baru.
+  if (isListItem) {
+    pushCurrent();
+    const autoId = pendingId || `Q${questions.length + 1}`;
+    pendingId = null;
+    current = {
+      id: autoId,
+      category: currentCategory,
+      question: text,
+      questionImages: [...images],
+      options: {},
+      answer: "",
+      explanation: "",
+      explanationImages: [],
+    };
+    mode = "question";
     continue;
   }
 
